@@ -84,6 +84,27 @@ class UserController extends Controller
     }
 
     /**
+     * Display the specified resource (Protected: GET /api/users/{id}/secure).
+     * Requires Bearer token via Sanctum.
+     */
+    public function showProtected(Request $request, string $id)
+    {
+        try {
+            $user = User::findOrFail($id, ['id', 'name', 'email', 'created_at']);
+
+            return response()->json([
+                'status' => 'success',
+                'data' => $user
+            ], 200);
+        } catch (\Illuminate\Database\Eloquent\ModelNotFoundException $e) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'User not found.'
+            ], 404);
+        }
+    }
+
+    /**
      * Update the specified resource in storage (PUT/PATCH /api/users/{id}).
      */
     public function update(Request $request, string $id)
@@ -109,6 +130,50 @@ class UserController extends Controller
             }
 
             // 3. Update the user record
+            $user->update($data);
+
+            return response()->json([
+                'status' => 'success',
+                'message' => 'User updated successfully.',
+                'user' => $user->only(['id', 'name', 'email']),
+            ], 200);
+
+        } catch (\Illuminate\Database\Eloquent\ModelNotFoundException $e) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'User not found for update.'
+            ], 404);
+        } catch (ValidationException $e) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'Validation failed',
+                'errors' => $e->errors(),
+            ], 422);
+        }
+    }
+
+    /**
+     * Update the specified resource (Protected: PUT/PATCH /api/users/{id}/secure).
+     * Requires Bearer token via Sanctum.
+     */
+    public function updateProtected(Request $request, string $id)
+    {
+        try {
+            $user = User::findOrFail($id);
+
+            $rules = [
+                'name' => 'sometimes|required|string|max:255',
+                'email' => 'sometimes|required|string|email|max:255|unique:users,email,'.$id,
+                'password' => 'sometimes|nullable|string|min:8|confirmed',
+            ];
+            $request->validate($rules);
+
+            $data = $request->only(['name', 'email']);
+
+            if ($request->filled('password')) {
+                $data['password'] = Hash::make($request->password);
+            }
+
             $user->update($data);
 
             return response()->json([
@@ -167,5 +232,49 @@ class UserController extends Controller
             'message' => 'Fake user created successfully.',
             'user' => $createdUser->only(['id', 'name', 'email']),
         ], 201);
+    }
+
+    /**
+     * Login a user and issue a Sanctum token (POST /api/auth/login).
+     */
+    public function login(Request $request)
+    {
+        $data = $request->validate([
+            'email' => ['required', 'string', 'email'],
+            'password' => ['required', 'string'],
+        ]);
+
+        $user = User::where('email', $data['email'])->first();
+
+        if (! $user || ! Hash::check($data['password'], $user->password)) {
+            throw ValidationException::withMessages([
+                'email' => ['The provided credentials are incorrect.'],
+            ]);
+        }
+
+        $token = $user->createToken('api')->plainTextToken;
+        
+        return response()->json([
+            'token' => $token,
+            'user' => $user->only(['id', 'name', 'email']),
+        ], 200);
+    }
+
+    /**
+     * Return the authenticated user (GET /api/auth/me) [auth:sanctum].
+     */
+    public function me(Request $request)
+    {
+        return response()->json($request->user());
+    }
+
+    /**
+     * Revoke the current token (POST /api/auth/logout) [auth:sanctum].
+     */
+    public function logout(Request $request)
+    {
+        $request->user()->currentAccessToken()->delete();
+
+        return response()->json(['message' => 'Logged out']);
     }
 }
